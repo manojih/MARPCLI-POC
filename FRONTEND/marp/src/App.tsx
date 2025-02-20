@@ -67,7 +67,7 @@ function App() {
 
       {/* Right Side: Upload Section */}
       <div className="upload-container">
-        <h1 className="header">Upload Your Markdown File</h1>
+        <h1 className="header">Create your Pitch Deck!</h1>
         <input
           type="file"
           accept=".md"
