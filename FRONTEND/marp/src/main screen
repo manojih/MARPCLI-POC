@@ -1,0 +1,283 @@
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useForm } from "react-hook-form";
+import { z } from "zod";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "../../ui/form";
+import { Button } from "../../ui/button";
+import { Input } from "../../ui/input";
+import { useLoginApi } from "@/hooks/api/login/useLoginApi";
+import { LoginPostApi } from "@/types/login";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Link } from "react-router-dom";
+import { pageRoutes } from "@/config/routes";
+import { AuthLinkNavigationLayout } from "../layouts/AuthLinkNavigationLayout";
+import { useAuthStore, useScopedTenantIdSetter } from "@/stores/auth";
+import { toast } from "react-toastify";
+import { InputWithAdorment } from "@/components/ui/input-with-adorments";
+import { useRef, useState } from "react";
+
+import { jwtDecode } from "jwt-decode";
+import { JwtPayload } from "jwt-decode";
+import { useFetchFeatures } from "@/hooks/api/features/useFetchFeatures";
+import { useFeatureStore } from "@/stores/feature";
+import { FeatureModel } from "@/types/feature";
+import siteConfig from "@/config/site";
+
+import { handleApiError } from "@/lib/error";
+import { useTenantStore } from "@/stores/tenant";
+
+import { useThemeStore } from "@/stores/colors";
+import axiosInstance from "@/components/utils/axiosInterceptor";
+import SplashScreen from "@/components/utils/splashScreen";
+import { sanitizeInput } from "@/components/utils/sanitizeUtils";
+import {
+  fetchTenantMetadata,
+  useFetchTenantMetadata,
+} from "@/hooks/api/tenants/useGetMetaData";
+import { useQueryClient } from "@tanstack/react-query";
+import usePermissionStore from "@/stores/permissions";
+
+interface CustomJwtPayload extends JwtPayload {
+  id: string;
+  role: string;
+  tenantid: string;
+}
+
+const signinFormSchema = z.object({
+  email: z
+    .string()
+    .min(1, "Email is required")
+    .regex(
+      /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/,
+      "Invalid email format"
+    ),
+  password: z.string().min(8),
+  rememberMe: z.boolean().optional(),
+});
+
+const defaultSigninFormValues: z.infer<typeof signinFormSchema> = {
+  email: "",
+  password: "",
+  rememberMe: false,
+};
+
+function SigninForm() {
+  const inputPasswordRef = useRef<HTMLInputElement>(null);
+  const [showPassword, setShowPassword] = useState<boolean>(false);
+  const [isSplashVisible, setSplashVisible] = useState<boolean>(false);
+  const { mutate: login, isPending } = useLoginApi();
+  const { setToken, setRole, setUserId } = useAuthStore();
+  const setTenantId = useScopedTenantIdSetter();
+  const getFeatures = useFetchFeatures();
+  const { fetchFeatures } = useFeatureStore();
+  const { setFilterTenantId } = useTenantStore();
+  const queryClient = useQueryClient();
+
+  const setPermissions = usePermissionStore((state) => state.setPermissions);
+
+  const setSelectedTenantId = useTenantStore(
+    (state) => state.setSelectedTenantId
+  );
+  const form = useForm<z.infer<typeof signinFormSchema>>({
+    resolver: zodResolver(signinFormSchema),
+    defaultValues: defaultSigninFormValues,
+  });
+
+  function onSubmit(data: z.infer<typeof signinFormSchema>) {
+    const loginBody: LoginPostApi = {
+      email: sanitizeInput(data.email),
+      password: data.password,
+    };
+    setSplashVisible(true);
+
+    login(loginBody, {
+      onSuccess: async (data) => {
+        setSplashVisible(false);
+
+        toast.success("Login successful!");
+
+        try {
+          const decodedToken: CustomJwtPayload = jwtDecode(data.accessToken);
+          const { id, role, tenantid } = decodedToken;
+          const { primaryColor, secondaryColor, logo } = data;
+          useThemeStore.getState().setImageFile(logo);
+          useThemeStore.getState().setPrimaryColor(primaryColor);
+          useThemeStore.getState().setSecondaryColor(secondaryColor);
+
+          setToken(data.accessToken);
+          setRole(role);
+          setUserId(id);
+          setTenantId(tenantid);
+          setFilterTenantId(tenantid);
+
+          if (tenantid) {
+            setSelectedTenantId(String(tenantid));
+
+            try {
+              const { features, permissions } = await queryClient.fetchQuery({
+                queryKey: ["tenantMetadata", tenantid],
+                queryFn: () => fetchTenantMetadata(tenantid),
+              });
+              console.log("permissions list",permissions)
+              console.log("features list ",features)
+              setPermissions(permissions);
+              fetchFeatures(features);
+            } catch (error) {
+              handleApiError(error);
+            }
+          } else {
+            const hardcodedFeatures: FeatureModel[] = [
+              { id: 1, featureName: "Home" },
+              { id: 2, featureName: "Administration" },
+              { id: 3, featureName: "Tenants" },
+              { id: 4, featureName: "All Users" },
+              { id: 5, featureName: "Support" },
+              { id: 6, featureName: "Tenant User Tickets" },
+              { id: 7, featureName: "Tenant Admin Tickets" },
+              { id: 8, featureName: "Roles And Access" },
+              { id: 9, featureName: "Settings" },
+              { id: 10, featureName: "Insights" },
+            ];
+
+            fetchFeatures(hardcodedFeatures);
+            console.log("Features stored in store:", hardcodedFeatures);
+          }
+        } catch (error) {
+          handleApiError(error);
+        }
+      },
+      onError: () => {
+        setSplashVisible(false);
+      },
+    });
+  }
+
+  const handleClickShowPassword = () => {
+    setShowPassword((prev) => !prev);
+
+    if (inputPasswordRef?.current) {
+      setTimeout(() => {
+        inputPasswordRef?.current?.focus();
+        inputPasswordRef?.current?.setSelectionRange(1000, 1000);
+      }, 0);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-8">
+      {isSplashVisible && <SplashScreen />}
+      <div className="flex flex-col gap-1">
+        <p className="text-secondary-700 font-poppins text-[24px] leading-none capitalize ">
+          SIGN IN
+        </p>
+      </div>
+      <Form {...form}>
+        <form onSubmit={form.handleSubmit(onSubmit)}>
+          <div className="flex flex-col gap-8">
+            <FormField
+              control={form.control}
+              name="email"
+              render={({ field }) => (
+                <FormItem>
+                  <FormControl>
+                    <input
+                      type="email"
+                      placeholder="Registered Email ID"
+                      {...field}
+                      className="pl-2 flex h-10 w-full border-b border-support-400 bg-background px-3 py-2 text-sm focus-visible:outline-none placeholder:text-secondary-950 placeholder:font-poppins placeholder:text-[14px] placeholder:font-normal placeholder:capitalize rounded-md"
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="password"
+              render={({ field }) => (
+                <FormItem>
+                  <FormControl>
+                    <InputWithAdorment
+                      type={showPassword ? "text" : "password"}
+                      placeholder="Enter Password"
+                      {...field}
+                      className=" flex h-10 w-full border-b border-support-400 bg-background text-sm focus:outline-none placeholder:text-secondary-950 placeholder:font-poppins placeholder:text-[14px] placeholder:font-normal placeholder:capitalize rounded-md"
+                      showPassword={showPassword}
+                      handleClickShowPassword={handleClickShowPassword}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <div className="flex flex-col gap-3">
+              <FormField
+                control={form.control}
+                name="rememberMe"
+                render={({ field }) => {
+                  const { onChange, value, ...rest } = field;
+                  return (
+                    <FormItem className="flex flex-row items-center space-x-1 space-y-0">
+                      <FormControl>
+                        <Checkbox
+                          checked={value}
+                          onCheckedChange={onChange}
+                          {...rest}
+                        />
+                      </FormControl>
+                      <FormLabel className="text-sm text-secondary-500 font-normal">
+                        Remember Me
+                      </FormLabel>
+                      <FormMessage />
+                    </FormItem>
+                  );
+                }}
+              />
+
+              <Button
+                type="submit"
+                className="uppercase text-[18px] py-[12px] h-[50px]"
+                variant="auth"
+                isLoading={isPending}
+              >
+                Sign In
+              </Button>
+            </div>
+
+            <SigninNavigation />
+          </div>
+        </form>
+      </Form>
+    </div>
+  );
+}
+
+function SigninNavigation() {
+  return (
+    <AuthLinkNavigationLayout>
+      <AuthLinkNavigationLayout.NavLink>
+        <Link className="text-[#176d5d] text-[16px]" to={pageRoutes.register}>
+          Register
+        </Link>
+      </AuthLinkNavigationLayout.NavLink>
+
+      <AuthLinkNavigationLayout.NavLink>
+        <Link
+          className="text-[#176d5d] text-[16px]"
+          to={pageRoutes.forgotPassword}
+        >
+          Forgot Password?
+        </Link>
+      </AuthLinkNavigationLayout.NavLink>
+    </AuthLinkNavigationLayout>
+  );
+}
+
+export default SigninForm;
